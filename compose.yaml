@@ -1,0 +1,10 @@
+﻿services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: ragdb
+    environment:
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: ragpass
+      POSTGRES_DB: ragdb
+    ports: [ "5432:5432" ]
+    restart: unless-stopped
