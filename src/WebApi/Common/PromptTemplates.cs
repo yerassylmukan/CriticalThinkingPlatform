@@ -2,102 +2,125 @@ namespace WebApi.Common;
 
 public static class PromptTemplates
 {
-    public static string BuildGenerationPrompt(string question, string lang = "English")
+    public static string BuildGenerationPrompt(string question, string lang = "Русский")
     {
         return $@"
-        You are creating four distinct answers to the same question to train critical thinking.
-        Language: match the input language. If the question is in English, answer in English.
+Ты — ассистент, который создаёт четыре разных ответа на один и тот же вопрос,
+чтобы тренировать критическое мышление.
 
-        Question:
-        {question}
+Язык ответа: совпадает с языком вопроса. 
+Если вопрос на русском — отвечай по-русски.
 
-        Produce STRICT JSON with an array 'answers', each item:
-        - 'level': one of ['low','low','medium','high'] exactly two lows, one medium, one high
-        - 'score': 50 for low, 75 for medium, 100 for high
-        - 'text': the answer content (unique; no overlap; correct tone for {lang})
+Вопрос:
+{question}
 
-        Constraints:
-        - All four answers must be unique in reasoning and detail.
-        - Do NOT include any commentary outside JSON.
+СФОРМИРУЙ СТРОГИЙ JSON с массивом ""answers"". Каждый элемент массива должен содержать:
+- ""level"": одно из значений [""low"", ""low"", ""medium"", ""high""].
+  В сумме в массиве должно быть ровно ДВА ""low"", ОДИН ""medium"" и ОДИН ""high"".
+- ""score"": 50 для ""low"", 75 для ""medium"", 100 для ""high"".
+- ""text"": текст ответа (уникальный; без повторения формулировок; подходящий по стилю для языка: {lang}).
 
-        Example:
-        {{""answers"":[
-          {{""level"":""low"",""score"":50,""text"":""...""}},
-          {{""level"":""low"",""score"":50,""text"":""...""}},
-          {{""level"":""medium"",""score"":75,""text"":""...""}},
-          {{""level"":""high"",""score"":100,""text"":""...""}}
-        ]}}
-        ";
+Ограничения:
+- Все четыре ответа должны отличаться глубиной и ходом рассуждений.
+- Не добавляй никакого текста вне JSON (никаких пояснений до или после).
+
+Пример формата (это только пример структуры, НЕ используй его текст):
+{{""answers"":[
+  {{""level"":""low"",""score"":50,""text"":""...""}},
+  {{""level"":""low"",""score"":50,""text"":""...""}},
+  {{""level"":""medium"",""score"":75,""text"":""...""}},
+  {{""level"":""high"",""score"":100,""text"":""...""}}
+]}}
+";
     }
 
     public static string BuildEvaluationPrompt(
         string question,
         string studentAnswer,
         IEnumerable<(string level, int score, string text)> golds,
-        string lang = "English")
+        string lang = "Русский")
     {
         return $@"
-        You are an impartial grader for middle school critical thinking.
+Ты — беспристрастный проверяющий ответов по критическому мышлению для учеников средней школы.
 
-        Question:
-        {question}
+Задача:
+Оценить ответ ученика на вопрос, используя набор эталонных ответов разного уровня.
 
-        Student answer:
-        {studentAnswer}
+Вопрос:
+{question}
 
-        Reference set (four answers with levels and anchor scores): 
-        {string.Join("\n\n", golds.Select(g => $"- level: {g.level}, score: {g.score}\ntext: {g.text}"))}
+Ответ ученика:
+{studentAnswer}
 
-        Scoring policy (STRICT):
-        - First, decide which single reference level the student's answer most closely matches: low (50), medium (75), or high (100).
-        - Let base score be exactly 50, 75, or 100 based on that chosen level.
-        - Then apply a small integer adjustment in the range -5..+5 to reflect nuances (clarity, evidence, structure).
-        - Final score = base + adjustment. Final must be an integer in 0..100 (after clamping if needed).
-        - Examples: 
-          * if closest level = low → final typically 50..55
-          * if closest level = medium → final typically 70..80 (centered at 75)
-          * if closest level = high → final typically 95..100 (or 90..100 if slightly weaker)
+Эталонный набор (четыре ответа с уровнями и базовыми баллами):
+{string.Join("\n\n", golds.Select(g => $"- level: {g.level}, score: {g.score}\ntext: {g.text}"))}
 
-        Tasks:
-        1) Briefly justify the chosen level (<= 3 sentences).
-        2) Provide strengths (bullets) and concrete actionable recommendations (bullets).
-        3) Provide a short 'advice' paragraph with next steps.
+Политика оценивания (СТРОГО):
+1. Сначала выбери, какому одному уровню из эталонов ближе всего ответ ученика:
+   - low  (базовый балл 50),
+   - medium (базовый балл 75),
+   - high (базовый балл 100).
+2. Установи базовый балл: 50, 75 или 100, в зависимости от выбранного уровня.
+3. Затем за счёт нюансов (ясность, аргументация, структура, примеры) добавь поправку —
+   целое число в диапазоне от -5 до +5.
+4. Итоговый балл = base + adjustment.
+   После этого зажми итог в диапазоне 0..100.
 
-        Output STRICT JSON (no extra text):
-        {{
-          ""match_level"": ""low|medium|high"",
-          ""base"": 50|75|100,
-          ""adjustment"": -5| -4| -3| -2| -1| 0| 1| 2| 3| 4| 5,
-          ""score"": <integer 0..100>, 
-          ""rationale"": ""<= 3 sentences"",
-          ""strengths"": [""bullet 1"", ""bullet 2""],
-          ""recommendations"": [""action 1"", ""action 2"", ""action 3""],
-          ""advice"": ""one short paragraph""
-        }}
+Типичные диапазоны:
+- если уровень ""low"" → обычно 50..55,
+- если уровень ""medium"" → обычно 70..80 (центр 75),
+- если уровень ""high"" → обычно 95..100 (или 90..100, если чуть слабее).
 
-        Language: match the student's answer language; if ambiguous, use the question's language.
-        No text outside JSON.
-        ";
+Требуемые задачи:
+1) Кратко обосновать выбранный уровень (не больше 3 предложений).
+2) Выделить сильные стороны ответа (2 пункта-списка).
+3) Дать конкретные рекомендации по улучшению (минимум 3 пункта-списка).
+4) Написать короткий абзац ""advice"" с общими следующими шагами для ученика.
+
+ФОРМАТ ВЫВОДА — СТРОГИЙ JSON (никакого текста снаружи). Структура:
+
+{{
+  ""match_level"": ""low"" | ""medium"" | ""high"",
+  ""base"": 50 | 75 | 100,
+  ""adjustment"": целое число от -5 до 5,
+  ""score"": целое число от 0 до 100,
+  ""rationale"": ""до 3 предложений"",
+  ""strengths"": [""пункт 1"", ""пункт 2""],
+  ""recommendations"": [""действие 1"", ""действие 2"", ""действие 3""],
+  ""advice"": ""короткий абзац советов""
+}}
+
+Язык вывода:
+- Совпадает с языком ответа ученика.
+- Если язык ответа неочевиден — используй язык вопроса.
+- Но значения полей match_level, base, adjustment, score должны быть в формате, описанном выше.
+";
     }
 
-    public static string BuildConspectPrompt(string title, IEnumerable<string> questions, string lang = "English")
+    public static string BuildConspectPrompt(
+        string title,
+        IEnumerable<string> questions,
+        string lang = "Русский")
     {
         var q = string.Join("\n- ", questions ?? Array.Empty<string>());
+
         return $@"
-        You are a middle-school educator. Create a comprehensive yet concise lesson conspectus on the topic below.
-        Language: {lang}. The style should be clear, structured, actionable.
+Ты — учитель средней школы. Составь понятный и структурированный конспект урока по теме ниже.
+Язык конспекта: {lang}. Стиль: простой, ясный, ориентированный на практику.
 
-        Topic: {title}
+Тема: {title}
 
-        Guiding questions to cover:
-        - {q}
+Вопросы, которые нужно обязательно покрыть:
+- {q}
 
-        Write a single continuous conspectus (no JSON), with:
-        - 6–10 short sections with headers,
-        - key definitions, short examples, common misconceptions,
-        - quick checks (questions) and 3–5 actionable tips at the end.
+Требования к конспекту (вывод ТОЛЬКО текст, без JSON):
+- 6–10 коротких разделов с заголовками.
+- Дай ключевые определения, краткие примеры, типичные ошибки и заблуждения.
+- Вставь по ходу текста небольшие вопросы для самопроверки (формата ""попробуй ответить..."").
+- В конце добавь 3–5 конкретных и понятных советов, как лучше освоить тему.
 
-        Do not include any meta commentary or JSON. Output plain text only.
-        ";
+Не добавляй никаких мета-комментариев вроде ""Вот ваш конспект"" и не используй JSON.
+Только сам текст конспекта.
+";
     }
 }
