@@ -46,10 +46,8 @@ public static class AuthEndpoints
                 LastName = r.LastName
             });
             await db.SaveChangesAsync(ct);
-
-            if (!await roleManager.RoleExistsAsync("Student"))
-                await roleManager.CreateAsync(new ApplicationRole("Student"));
-            await userManager.AddToRoleAsync(user, "Student");
+            
+            await userManager.AddToRoleAsync(user, "Teacher");
 
             var ip = http.Connection.RemoteIpAddress?.ToString();
             var ua = http.Request.Headers.UserAgent.ToString();
