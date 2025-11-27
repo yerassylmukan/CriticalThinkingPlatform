@@ -16,41 +16,42 @@ public class InviteOptions
 
 public sealed class InviteService
 {
-    private readonly InviteOptions _opts;
     private readonly ILogger<InviteService> _log;
-    
+    private readonly InviteOptions _opts;
+
     public InviteService(IOptions<InviteOptions> opts, ILogger<InviteService> log)
     {
         _opts = opts.Value;
         _log = log;
     }
-    
+
     public (string token, DateTime expiresUtc) CreateInvite(Guid classId, string ownerTeacherId, string? emailHint)
     {
         var now = DateTime.UtcNow;
         var expires = now.Add(_opts.Ttl);
-        
+
         var claims = new List<Claim>
         {
             new("typ", "class-invite"),
             new("classId", classId.ToString()),
             new("owner", ownerTeacherId),
-            new(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64)
+            new(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now).ToUnixTimeSeconds().ToString(),
+                ClaimValueTypes.Integer64)
         };
         if (!string.IsNullOrWhiteSpace(emailHint))
             claims.Add(new Claim("email", emailHint));
-        
+
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_opts.Hs256Secret));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-        
+
         var jwt = new JwtSecurityToken(
-            issuer: _opts.Issuer,
-            audience: _opts.Audience,
-            claims: claims,
-            notBefore: now,
-            expires: expires,
-            signingCredentials: creds);
-        
+            _opts.Issuer,
+            _opts.Audience,
+            claims,
+            now,
+            expires,
+            creds);
+
         var token = new JwtSecurityTokenHandler().WriteToken(jwt);
         _log.LogInformation("Invite created for class {ClassId} by {Owner}", classId, ownerTeacherId);
         return (token, expires);
@@ -73,14 +74,14 @@ public sealed class InviteService
                 ValidateLifetime = true,
                 ClockSkew = TimeSpan.Zero
             }, out var validated);
-            
+
             if (principal.FindFirst("typ")?.Value != "class-invite")
                 return null;
-            
+
             var cid = principal.FindFirst("classId")?.Value;
             var owner = principal.FindFirst("owner")?.Value;
             var email = principal.FindFirst("email")?.Value;
-            
+
             return Guid.TryParse(cid, out var classId)
                 ? (classId, owner, email)
                 : null;

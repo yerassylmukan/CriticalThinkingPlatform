@@ -1,6 +1,4 @@
-using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using WebApi.Auth.Infrastructure.Data;
@@ -20,9 +18,11 @@ public static class TeacherRagEndpoints
 
         g.MapPost("/topics", async ([FromBody] CreateTopicRequest r, RagService svc) =>
         {
+            var lang = string.IsNullOrWhiteSpace(r.Lang) ? "English" : r.Lang;
+
             var topic = r.GenerateConspect
-                ? await svc.CreateTopicWithGeneratedAnswersAndConspectAsync(r.Title, r.Questions)
-                : await svc.CreateTopicWithGeneratedAnswersAsync(r.Title, r.Questions, r.Conspect);
+                ? await svc.CreateTopicWithGeneratedAnswersAndConspectAsync(r.Title, r.Questions, lang)
+                : await svc.CreateTopicWithGeneratedAnswersAsync(r.Title, r.Questions, r.Conspect, lang);
 
             return Results.Json(new { topic.Id, topic.Title, topic.CreatedUtc });
         });
@@ -72,9 +72,9 @@ public static class TeacherRagEndpoints
             var tid = user.FindFirstValue(ClaimTypes.NameIdentifier)!;
 
             var anyRelation = await (from c in school.Classes
-                                     join m in school.ClassMembers on c.Id equals m.ClassId
-                                     where c.OwnerTeacherId == tid && m.UserId == studentId
-                                     select c.Id).AnyAsync();
+                join m in school.ClassMembers on c.Id equals m.ClassId
+                where c.OwnerTeacherId == tid && m.UserId == studentId
+                select c.Id).AnyAsync();
 
             if (!anyRelation) return Results.Forbid();
 
@@ -124,5 +124,12 @@ public static class TeacherRagEndpoints
         return app;
     }
 
-    public record TeacherSessionListItem(Guid Id, string StudentId, Guid TopicId, string TopicTitle, DateTime StartedUtc, bool Evaluated, decimal? TotalScore);
+    public record TeacherSessionListItem(
+        Guid Id,
+        string StudentId,
+        Guid TopicId,
+        string TopicTitle,
+        DateTime StartedUtc,
+        bool Evaluated,
+        decimal? TotalScore);
 }

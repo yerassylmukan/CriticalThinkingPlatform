@@ -1,149 +1,122 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 using WebApi.Common;
 using WebApi.Rag.Entities;
 using WebApi.Rag.Infrastructure.Data;
-using WebApi.Rag.Infrastructure.Ollama;
+using WebApi.Rag.Infrastructure.OpenRouter;
 
 namespace WebApi.Rag.Application;
 
-public class EvaluateService(
-    RagDbContext db,
-    OllamaClient ollama,
-    IOptions<AppSettings> opts)
+public sealed class EvaluateService
 {
-    private readonly string _model = opts.Value.Llm.Model;
+    private readonly RagDbContext _db;
+    private readonly OpenRouterClient _llm;
+
+    public EvaluateService(RagDbContext db, OpenRouterClient llm)
+    {
+        _db = db;
+        _llm = llm;
+    }
 
     public async Task<Guid> EvaluateAsync(Guid sessionId, CancellationToken ct = default)
     {
-        var evaluatedData = await db.Evaluations.AsNoTracking().SingleOrDefaultAsync(x => x.SessionId == sessionId, ct);
+        var session = await _db.StudentSessions
+                          .Include(s => s.Topic)
+                          .ThenInclude(t => t.Questions).ThenInclude(q => q.Generated)
+                          .Include(s => s.Responses)
+                          .SingleOrDefaultAsync(s => s.Id == sessionId, ct)
+                      ?? throw new KeyNotFoundException("Session not found.");
 
-        if (evaluatedData != null) return evaluatedData.Id;
+        if (session.Evaluation != null)
+            return session.Evaluation.Id;
 
-        var session = await db.StudentSessions
-            .Include(s => s.Topic).ThenInclude(t => t.Questions).ThenInclude(q => q.Generated)
-            .Include(s => s.Responses)
-            .SingleAsync(s => s.Id == sessionId, ct);
+        decimal sum = 0;
+        var evaluatedCount = 0;
+        var reportItems = new List<object>();
 
-        var perQuestion = new List<object>();
-        var scores = new List<decimal>();
-
-        foreach (var r in session.Responses)
+        foreach (var question in session.Topic.Questions)
         {
-            var q = session.Topic.Questions.Single(x => x.Id == r.QuestionId);
+            var studentResponse = session.Responses
+                .FirstOrDefault(r => r.QuestionId == question.Id);
 
-            var golds = q.Generated
-                .OrderByDescending(g => g.Level)
-                .Select(g => (g.Level.ToString().ToLower(), (int)g.Level, g.Text))
-                .ToList();
+            if (studentResponse == null)
+                continue;
 
-            var prompt = PromptTemplates.BuildEvaluationPrompt(q.Text, r.Answer, golds);
+            var golds = question.Generated.Select(g => (
+                level: g.Level.ToString().ToLower(),
+                score: (int)g.Level,
+                text: g.Text
+            ));
 
-            var el = await ollama.GenerateJsonAsync(_model, prompt, 0);
+            var prompt = PromptTemplates.BuildEvaluationPrompt(
+                question.Text,
+                studentResponse.Answer,
+                golds
+            );
 
-            var baseScore = 0;
-            var adjustment = 0;
+            var json = await _llm.ChatAsync(prompt, true, ct);
+            var parsed = JsonSerializer.Deserialize<EvalResult>(json)
+                         ?? throw new InvalidOperationException("Failed to parse evaluation JSON.");
 
-            if (el.TryGetProperty("match_level", out var ml))
-                switch ((ml.GetString() ?? "").ToLowerInvariant())
-                {
-                    case "low": baseScore = 50; break;
-                    case "medium": baseScore = 75; break;
-                    case "high": baseScore = 100; break;
-                }
+            sum += parsed.Score;
+            evaluatedCount++;
 
-            if (el.TryGetProperty("base", out var b) && b.ValueKind == JsonValueKind.Number)
+            reportItems.Add(new
             {
-                var bval = b.TryGetInt32(out var bi) ? bi : (int)Math.Round(b.GetDouble());
-                if (Math.Abs(bval - 50) <= 2) baseScore = 50;
-                else if (Math.Abs(bval - 75) <= 2) baseScore = 75;
-                else if (Math.Abs(bval - 100) <= 2) baseScore = 100;
-            }
-
-            if (el.TryGetProperty("adjustment", out var adj) && adj.ValueKind == JsonValueKind.Number)
-            {
-                adjustment = adj.TryGetInt32(out var ai) ? ai : (int)Math.Round(adj.GetDouble());
-                adjustment = Math.Max(-5, Math.Min(5, adjustment));
-            }
-
-            var fallback = 0;
-            if (el.TryGetProperty("score", out var s))
-            {
-                if (s.ValueKind == JsonValueKind.Number)
-                    fallback = s.TryGetInt32(out var iv) ? iv : (int)Math.Round(s.GetDouble());
-                else if (s.ValueKind == JsonValueKind.String && int.TryParse(s.GetString(), out var sv))
-                    fallback = sv;
-            }
-
-            if (baseScore == 0)
-            {
-                if (fallback == 0) fallback = 60;
-                var diffs = new[]
-                    { (50, Math.Abs(fallback - 50)), (75, Math.Abs(fallback - 75)), (100, Math.Abs(fallback - 100)) };
-                baseScore = diffs.OrderBy(d => d.Item2).First().Item1;
-                adjustment = Math.Max(-5, Math.Min(5, fallback - baseScore));
-            }
-
-            var finalScore = Math.Max(0, Math.Min(100, baseScore + adjustment));
-            scores.Add(finalScore);
-
-            var pq = new
-            {
-                questionId = q.Id,
-                match_level = el.TryGetProperty("match_level", out var _ml) ? _ml.GetString() ?? "" :
-                    baseScore == 50 ? "low" :
-                    baseScore == 75 ? "medium" : "high",
-                baseScoreValue = baseScore,
-                adjustment,
-                score = finalScore,
-                rationale = el.TryGetProperty("rationale", out var rj) ? rj.GetString() ?? "" : "",
-                strengths = el.TryGetProperty("strengths", out var st) && st.ValueKind == JsonValueKind.Array
-                    ? st.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => x.Length > 0).ToArray()
-                    : [],
-                recommendations = el.TryGetProperty("recommendations", out var rc) &&
-                                  rc.ValueKind == JsonValueKind.Array
-                    ? rc.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => x.Length > 0).ToArray()
-                    : [],
-                advice = el.TryGetProperty("advice", out var ad) ? ad.GetString() ?? "" : ""
-            };
-            perQuestion.Add(pq);
+                question = question.Text,
+                student = studentResponse.Answer,
+                match_level = parsed.MatchLevel,
+                @base = parsed.BaseScore,
+                adjustment = parsed.Adjustment,
+                score = parsed.Score,
+                rationale = parsed.Rationale,
+                strengths = parsed.Strengths,
+                recommendations = parsed.Recommendations,
+                advice = parsed.Advice
+            });
         }
 
-        var overall = scores.Count == 0
-            ? 0m
-            : Math.Round(scores.Average(), 2, MidpointRounding.AwayFromZero);
+        var final = evaluatedCount > 0 ? sum / evaluatedCount : 0;
+        final = Math.Round(final, 2);
 
-        var payload = new
-        {
-            sessionId,
-            overallScore = overall,
-            perQuestion
-        };
-
-        var ev = new Evaluation
+        var evaluation = new Evaluation
         {
             SessionId = sessionId,
-            TotalScore = overall,
-            ReportJson = JsonSerializer.Serialize(payload)
+            TotalScore = final,
+            ReportJson = JsonSerializer.Serialize(reportItems)
         };
 
-        db.Evaluations.Add(ev);
-        await db.SaveChangesAsync(ct);
-        return ev.Id;
+        _db.Evaluations.Add(evaluation);
+        await _db.SaveChangesAsync(ct);
+
+        return evaluation.Id;
     }
 
-    public async Task<string?> GetReportBySessionAsync(Guid sessionId, CancellationToken ct = default)
+    public async Task<string?> GetReportBySessionAsync(Guid id)
     {
-        return await db.Evaluations
-            .AsNoTracking()
-            .Where(x => x.SessionId == sessionId)
-            .Select(x => x.ReportJson)
-            .SingleOrDefaultAsync(ct);
+        return await _db.Evaluations
+            .Where(e => e.SessionId == id)
+            .Select(e => e.ReportJson)
+            .SingleOrDefaultAsync();
     }
 
-    public Task<Evaluation?> GetEvaluationAsync(Guid evaluationId, CancellationToken ct = default)
+    private sealed class EvalResult
     {
-        return db.Evaluations.AsNoTracking().SingleOrDefaultAsync(x => x.Id == evaluationId, ct);
+        [JsonPropertyName("match_level")] public string MatchLevel { get; set; } = default!;
+
+        [JsonPropertyName("base")] public int BaseScore { get; set; }
+
+        [JsonPropertyName("adjustment")] public int Adjustment { get; set; }
+
+        [JsonPropertyName("score")] public int Score { get; set; }
+
+        [JsonPropertyName("rationale")] public string Rationale { get; set; } = default!;
+
+        [JsonPropertyName("strengths")] public List<string> Strengths { get; set; } = new();
+
+        [JsonPropertyName("recommendations")] public List<string> Recommendations { get; set; } = new();
+
+        [JsonPropertyName("advice")] public string Advice { get; set; } = default!;
     }
 }

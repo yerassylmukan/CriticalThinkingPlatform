@@ -8,8 +8,8 @@ namespace WebApi.Rag.Security;
 
 public sealed class TeacherOverStudentHandler : AuthorizationHandler<TeacherOverStudentRequirement>
 {
-    private readonly SchoolDbContext _school;
     private readonly RagDbContext _rag;
+    private readonly SchoolDbContext _school;
 
     public TeacherOverStudentHandler(SchoolDbContext school, RagDbContext rag)
     {
@@ -17,7 +17,8 @@ public sealed class TeacherOverStudentHandler : AuthorizationHandler<TeacherOver
         _rag = rag;
     }
 
-    protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, TeacherOverStudentRequirement requirement)
+    protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context,
+        TeacherOverStudentRequirement requirement)
     {
         if (context.Resource is not HttpContext http) return;
 
@@ -28,25 +29,21 @@ public sealed class TeacherOverStudentHandler : AuthorizationHandler<TeacherOver
 
         var idStr = http.Request.RouteValues.TryGetValue("id", out var rid) ? rid?.ToString() : null;
         if (Guid.TryParse(idStr, out var sessionId))
-        {
             studentId = await _rag.StudentSessions.AsNoTracking()
                 .Where(s => s.Id == sessionId)
                 .Select(s => s.StudentId)
                 .SingleOrDefaultAsync();
-        }
 
         if (string.IsNullOrEmpty(studentId))
-        {
             if (http.Request.Query.TryGetValue("studentId", out var qval))
                 studentId = qval.ToString();
-        }
 
         if (string.IsNullOrEmpty(studentId)) return;
 
         var any = await (from c in _school.Classes
-                         join m in _school.ClassMembers on c.Id equals m.ClassId
-                         where c.OwnerTeacherId == teacherId && m.UserId == studentId
-                         select c.Id).AnyAsync();
+            join m in _school.ClassMembers on c.Id equals m.ClassId
+            where c.OwnerTeacherId == teacherId && m.UserId == studentId
+            select c.Id).AnyAsync();
 
         if (any) context.Succeed(requirement);
     }

@@ -1,6 +1,11 @@
 namespace WebApi.Rag.Application;
 
-public record CreateTopicRequest(string Title, string[] Questions, string? Conspect, bool GenerateConspect);
+public record CreateTopicRequest(
+    string Title,
+    string[] Questions,
+    string? Conspect,
+    bool GenerateConspect,
+    string Lang = "English");
 
 public record CreateSessionRequest(string StudentId, Guid TopicId);
 

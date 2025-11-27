@@ -20,17 +20,18 @@ public static class StudentsModule
 
         b.Services.AddScoped<StudentService>();
         b.Services.AddScoped<InviteService>();
-        
+
         b.Services.Configure<InviteOptions>(o =>
         {
             b.Configuration.GetSection("JwtInvite").Bind(o);
-            
+
             if (string.IsNullOrWhiteSpace(o.Hs256Secret))
             {
-                o.Issuer   = b.Configuration["Jwt:Issuer"]    ?? "app-issuer";
-                o.Audience = b.Configuration["Jwt:Audience"]  ?? "app-audience";
+                o.Issuer = b.Configuration["Jwt:Issuer"] ?? "app-issuer";
+                o.Audience = b.Configuration["Jwt:Audience"] ?? "app-audience";
                 o.Hs256Secret = b.Configuration["Jwt:Hs256Secret"]
-                                ?? throw new InvalidOperationException("Missing JwtInvite:Hs256Secret or Jwt:Hs256Secret");
+                                ?? throw new InvalidOperationException(
+                                    "Missing JwtInvite:Hs256Secret or Jwt:Hs256Secret");
                 o.Ttl = TimeSpan.FromDays(7);
             }
         });

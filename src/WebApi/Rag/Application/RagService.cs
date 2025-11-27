@@ -1,48 +1,63 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
-using Npgsql;
-using Pgvector;
 using WebApi.Common;
 using WebApi.Rag.Entities;
 using WebApi.Rag.Enums;
 using WebApi.Rag.Infrastructure.Data;
-using WebApi.Rag.Infrastructure.Ollama;
+using WebApi.Rag.Infrastructure.OpenRouter;
 
 namespace WebApi.Rag.Application;
 
-public class RagService(
-    RagDbContext db,
-    OllamaClient ollama,
-    IOptions<AppSettings> opts)
+public sealed class RagService
 {
-    private readonly string _embModel = opts.Value.Embed.Model;
-    private readonly string _genModel = opts.Value.Llm.Model;
+    private readonly RagDbContext _db;
+    private readonly OpenRouterClient _llm;
+
+    public RagService(RagDbContext db, OpenRouterClient llm)
+    {
+        _db = db;
+        _llm = llm;
+    }
 
     public async Task<Topic> CreateTopicWithGeneratedAnswersAsync(
         string title,
         IEnumerable<string> questions,
-        string? conspect
-    )
+        string? conspect = null,
+        string lang = "English",
+        CancellationToken ct = default)
     {
-        var topic = new Topic { Title = title, Conspect = conspect };
-
-        foreach (var q in questions)
+        var topic = new Topic
         {
-            var prompt = PromptTemplates.BuildGenerationPrompt(q);
-            var root = await ollama.GenerateJsonAsync(_genModel, prompt, 0);
+            Title = title,
+            CreatedUtc = DateTime.UtcNow,
+            Conspect = conspect
+        };
 
-            if (!root.TryGetProperty("answers", out var answersArr) || answersArr.ValueKind != JsonValueKind.Array)
-                throw new InvalidOperationException("Model response missing 'answers' array");
+        foreach (var qtext in questions)
+        {
+            var q = new Question { Text = qtext };
+            topic.Questions.Add(q);
 
-            var qq = new Question { Text = q };
+            var prompt = PromptTemplates.BuildGenerationPrompt(qtext, lang);
+            var json = await _llm.ChatAsync(prompt, true, ct);
 
-            foreach (var it in answersArr.EnumerateArray())
+            var parsed = JsonSerializer.Deserialize<GeneratedAnswerResponse>(json)
+                         ?? throw new InvalidOperationException(
+                             $"Failed to parse generated answers JSON for question: '{qtext}'. Raw: {json}");
+
+            if (parsed.answers == null || parsed.answers.Count == 0)
+                throw new InvalidOperationException(
+                    $"LLM returned no answers for question: '{qtext}'. Raw: {json}");
+
+            foreach (var a in parsed.answers)
             {
-                var levelStr = it.TryGetProperty("level", out var l) ? l.GetString() ?? "low" : "low";
-                var text = it.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
+                var text = a.text?.Trim();
 
-                var level = levelStr.ToLowerInvariant() switch
+                if (string.IsNullOrWhiteSpace(text))
+                    continue;
+
+                var levelRaw = a.level?.Trim().ToLowerInvariant();
+                var level = levelRaw switch
                 {
                     "low" => AnswerLevel.Low,
                     "medium" => AnswerLevel.Medium,
@@ -50,69 +65,68 @@ public class RagService(
                     _ => AnswerLevel.Low
                 };
 
-                qq.Generated.Add(new GeneratedAnswer { Level = level, Text = text });
+                q.Generated.Add(new GeneratedAnswer
+                {
+                    Level = level,
+                    Text = text
+                });
             }
 
-            topic.Questions.Add(qq);
+            if (q.Generated.Count == 0)
+                throw new InvalidOperationException(
+                    $"LLM returned only empty/invalid answers for question: '{qtext}'. Raw: {json}");
         }
 
-        db.Topics.Add(topic);
-        await db.SaveChangesAsync();
+        _db.Topics.Add(topic);
+        await _db.SaveChangesAsync(ct);
+
         return topic;
     }
 
     public async Task<Topic> CreateTopicWithGeneratedAnswersAndConspectAsync(
         string title,
         IEnumerable<string> questions,
-        string lang = "English")
+        string lang = "English",
+        CancellationToken ct = default)
     {
-        var cprompt = PromptTemplates.BuildConspectPrompt(title, questions, lang);
-        var conspect = await ollama.GenerateAsync(_genModel, cprompt, 0);
+        var topic = await CreateTopicWithGeneratedAnswersAsync(title, questions, null, lang, ct);
 
-        return await CreateTopicWithGeneratedAnswersAsync(title, questions, conspect);
+        var conspectPrompt = PromptTemplates.BuildConspectPrompt(title, questions, lang);
+        var conspect = await _llm.ChatAsync(conspectPrompt, false, ct);
+
+        topic.Conspect = conspect;
+        await _db.SaveChangesAsync(ct);
+
+        return topic;
     }
 
-    public async Task<Guid> CreateSessionAsync(Guid topicId, string studentId)
+    public async Task<Guid> CreateSessionAsync(Guid topicId, string studentId, CancellationToken ct = default)
     {
-        var alreadyCreatedSession = await db.StudentSessions.AsNoTracking()
-            .SingleOrDefaultAsync(ss => ss.TopicId == topicId && ss.StudentId == studentId);
+        var topicExists = await _db.Topics.AnyAsync(t => t.Id == topicId, ct);
+        if (!topicExists) throw new KeyNotFoundException("Topic not found.");
 
-        if (alreadyCreatedSession != null) return alreadyCreatedSession.Id;
+        var session = new StudentSession
+        {
+            TopicId = topicId,
+            StudentId = studentId,
+            StartedUtc = DateTime.UtcNow
+        };
 
-        var session = new StudentSession { TopicId = topicId, StudentId = studentId };
-        db.StudentSessions.Add(session);
-        await db.SaveChangesAsync();
+        _db.StudentSessions.Add(session);
+        await _db.SaveChangesAsync(ct);
+
         return session.Id;
     }
 
-    public async Task<RagDocument> AddDocumentAsync(string content, string? source = null)
+    private sealed class GeneratedAnswerResponse
     {
-        var floats = await ollama.EmbedAsync(_embModel, content);
-        var doc = new RagDocument
+        public List<AnswerItem> answers { get; set; } = new();
+
+        public sealed class AnswerItem
         {
-            Content = content,
-            Source = source,
-            Embedding = new Vector(floats)
-        };
-
-        db.RagDocuments.Add(doc);
-        await db.SaveChangesAsync();
-        return doc;
-    }
-
-    public async Task<List<RagDocument>> RetrieveAsync(string query, int k = 4)
-    {
-        var floats = await ollama.EmbedAsync(_embModel, query);
-        var qv = new Vector(floats);
-
-        const string sql = @"SELECT * FROM ""RagDocuments""
-                             ORDER BY ""Embedding"" <-> @p
-                             LIMIT @k";
-
-        return await db.RagDocuments.FromSqlRaw(
-            sql,
-            new NpgsqlParameter("p", qv),
-            new NpgsqlParameter("k", k <= 0 ? 4 : k)
-        ).ToListAsync();
+            public string level { get; } = default!;
+            public int score { get; set; }
+            public string text { get; } = default!;
+        }
     }
 }

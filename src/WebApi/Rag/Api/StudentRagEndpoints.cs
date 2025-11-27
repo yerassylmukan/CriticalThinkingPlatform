@@ -1,6 +1,5 @@
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using WebApi.Rag.Application;
@@ -50,28 +49,29 @@ public static class StudentRagEndpoints
             return Results.Created($"/rag/student/sessions/{id}", new { id });
         });
 
-        g.MapGet("/sessions", async (ClaimsPrincipal user, RagDbContext db, [FromQuery] int page, [FromQuery] int pageSize) =>
-        {
-            var uid = user.FindFirstValue(ClaimTypes.NameIdentifier)!;
-            page = page <= 0 ? 1 : page;
-            pageSize = pageSize <= 0 ? 20 : Math.Min(100, pageSize);
+        g.MapGet("/sessions",
+            async (ClaimsPrincipal user, RagDbContext db, [FromQuery] int page, [FromQuery] int pageSize) =>
+            {
+                var uid = user.FindFirstValue(ClaimTypes.NameIdentifier)!;
+                page = page <= 0 ? 1 : page;
+                pageSize = pageSize <= 0 ? 20 : Math.Min(100, pageSize);
 
-            var q = db.StudentSessions
-                .Include(s => s.Evaluation)
-                .Include(s => s.Topic)
-                .Where(s => s.StudentId == uid);
+                var q = db.StudentSessions
+                    .Include(s => s.Evaluation)
+                    .Include(s => s.Topic)
+                    .Where(s => s.StudentId == uid);
 
-            var total = await q.CountAsync();
-            var items = await q
-                .OrderByDescending(s => s.StartedUtc)
-                .Skip((page - 1) * pageSize)
-                .Take(pageSize)
-                .Select(s => new StudentSessionListItem(
-                    s.Id, s.TopicId, s.Topic!.Title, s.StartedUtc, s.Evaluation != null, s.Evaluation!.TotalScore))
-                .ToListAsync();
+                var total = await q.CountAsync();
+                var items = await q
+                    .OrderByDescending(s => s.StartedUtc)
+                    .Skip((page - 1) * pageSize)
+                    .Take(pageSize)
+                    .Select(s => new StudentSessionListItem(
+                        s.Id, s.TopicId, s.Topic!.Title, s.StartedUtc, s.Evaluation != null, s.Evaluation!.TotalScore))
+                    .ToListAsync();
 
-            return Results.Ok(new { items, total, page, pageSize });
-        });
+                return Results.Ok(new { items, total, page, pageSize });
+            });
 
         g.MapGet("/sessions/{id:guid}", async (Guid id, RagDbContext db) =>
         {
@@ -117,5 +117,11 @@ public static class StudentRagEndpoints
 
     public record CreateStudentSessionRequest([property: Required] Guid TopicId);
 
-    public record StudentSessionListItem(Guid Id, Guid TopicId, string TopicTitle, DateTime StartedUtc, bool Evaluated, decimal? TotalScore);
+    public record StudentSessionListItem(
+        Guid Id,
+        Guid TopicId,
+        string TopicTitle,
+        DateTime StartedUtc,
+        bool Evaluated,
+        decimal? TotalScore);
 }

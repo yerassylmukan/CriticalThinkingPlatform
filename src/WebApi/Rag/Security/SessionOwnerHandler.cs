@@ -8,9 +8,14 @@ namespace WebApi.Rag.Security;
 public sealed class SessionOwnerHandler : AuthorizationHandler<SessionOwnerRequirement>
 {
     private readonly RagDbContext _rag;
-    public SessionOwnerHandler(RagDbContext rag) => _rag = rag;
 
-    protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, SessionOwnerRequirement requirement)
+    public SessionOwnerHandler(RagDbContext rag)
+    {
+        _rag = rag;
+    }
+
+    protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context,
+        SessionOwnerRequirement requirement)
     {
         if (context.Resource is not HttpContext http) return;
 

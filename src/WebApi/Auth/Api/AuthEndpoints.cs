@@ -46,7 +46,7 @@ public static class AuthEndpoints
                 LastName = r.LastName
             });
             await db.SaveChangesAsync(ct);
-            
+
             await userManager.AddToRoleAsync(user, "Teacher");
 
             var ip = http.Connection.RemoteIpAddress?.ToString();
