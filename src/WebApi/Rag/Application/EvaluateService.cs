@@ -24,7 +24,7 @@ public sealed class EvaluateService
         var session = await _db.StudentSessions
                           .Include(s => s.Topic)
                           .ThenInclude(t => t.Questions).ThenInclude(q => q.Generated)
-                          .Include(s => s.Responses)
+                          .Include(s => s.Responses).Include(studentSession => studentSession.Evaluation)
                           .SingleOrDefaultAsync(s => s.Id == sessionId, ct)
                       ?? throw new KeyNotFoundException("Session not found.");
 

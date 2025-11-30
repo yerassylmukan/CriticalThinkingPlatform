@@ -26,6 +26,8 @@ public sealed class RagService
         string lang = "English",
         CancellationToken ct = default)
     {
+        var questionList = questions.ToList();
+
         var topic = new Topic
         {
             Title = title,
@@ -33,26 +35,37 @@ public sealed class RagService
             Conspect = conspect
         };
 
-        foreach (var qtext in questions)
+        foreach (var q in questionList.Select(qtext => new Question { Text = qtext }))
         {
-            var q = new Question { Text = qtext };
             topic.Questions.Add(q);
+        }
 
-            var prompt = PromptTemplates.BuildGenerationPrompt(qtext, lang);
-            var json = await _llm.ChatAsync(prompt, true, ct);
+        var prompt = PromptTemplates.BuildGenerationPromptBatch(questionList, lang);
+        var json = await _llm.ChatAsync(prompt, jsonResponse: true, ct);
 
-            var parsed = JsonSerializer.Deserialize<GeneratedAnswerResponse>(json)
-                         ?? throw new InvalidOperationException(
-                             $"Failed to parse generated answers JSON for question: '{qtext}'. Raw: {json}");
+        var parsed = JsonSerializer.Deserialize<BatchGeneratedAnswerResponse>(json)
+                     ?? throw new InvalidOperationException(
+                         $"Failed to parse batch generated answers JSON. Raw: {json}");
 
-            if (parsed.answers == null || parsed.answers.Count == 0)
+        if (parsed.items == null || parsed.items.Count == 0)
+            throw new InvalidOperationException(
+                $"LLM returned no items for batch generation. Raw: {json}");
+
+        foreach (var item in parsed.items)
+        {
+            if (item.index < 0 || item.index >= topic.Questions.Count)
                 throw new InvalidOperationException(
-                    $"LLM returned no answers for question: '{qtext}'. Raw: {json}");
+                    $"LLM returned invalid question index {item.index}. Raw: {json}");
 
-            foreach (var a in parsed.answers)
+            var questionEntity = topic.Questions[item.index];
+
+            if (item.answers == null || item.answers.Count == 0)
+                throw new InvalidOperationException(
+                    $"LLM returned no answers for question index {item.index}. Raw: {json}");
+
+            foreach (var a in item.answers)
             {
                 var text = a.text?.Trim();
-
                 if (string.IsNullOrWhiteSpace(text))
                     continue;
 
@@ -65,16 +78,16 @@ public sealed class RagService
                     _ => AnswerLevel.Low
                 };
 
-                q.Generated.Add(new GeneratedAnswer
+                questionEntity.Generated.Add(new GeneratedAnswer
                 {
                     Level = level,
                     Text = text
                 });
             }
 
-            if (q.Generated.Count == 0)
+            if (questionEntity.Generated.Count == 0)
                 throw new InvalidOperationException(
-                    $"LLM returned only empty/invalid answers for question: '{qtext}'. Raw: {json}");
+                    $"LLM returned only empty/invalid answers for question index {item.index}. Raw: {json}");
         }
 
         _db.Topics.Add(topic);
@@ -124,9 +137,28 @@ public sealed class RagService
 
         public sealed class AnswerItem
         {
-            public string level { get; } = default!;
+            public string level { get; set; } = default!;
             public int score { get; set; }
-            public string text { get; } = default!;
+            public string text { get; set; } = default!;
+        }
+    }
+    
+    private sealed class BatchGeneratedAnswerResponse
+    {
+        public List<QuestionAnswers> items { get; set; } = new();
+
+        public sealed class QuestionAnswers
+        {
+            public int index { get; set; }
+            public string question { get; set; } = default!;
+            public List<AnswerItem> answers { get; set; } = new();
+        }
+
+        public sealed class AnswerItem
+        {
+            public string level { get; set; } = default!;
+            public int score { get; set; }
+            public string text { get; set; } = default!;
         }
     }
 }

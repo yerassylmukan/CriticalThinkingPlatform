@@ -2,50 +2,6 @@ namespace WebApi.Common;
 
 public static class PromptTemplates
 {
-    public static string BuildGenerationPrompt(string question, string lang = "English")
-    {
-        return $@"
-You are creating four distinct answers to the same question to train critical thinking.
-
-Language rules (STRICT):
-- Use exactly this output language: {lang}.
-- Even if the question is written in another language, you MUST answer only in {lang}.
-- Do NOT mix languages.
-
-Question:
-{question}
-
-Produce STRICT JSON with an array 'answers'. No extra text before or after JSON.
-The JSON format is:
-
-{{
-  ""answers"": [
-    {{
-      ""level"": ""low|medium|high"",
-      ""score"": 50|75|100,
-      ""text"": ""string""
-    }},
-    ...
-  ]
-}}
-
-Requirements:
-- There must be exactly 4 items in 'answers'.
-- 'level' values: exactly two ""low"", one ""medium"", one ""high"".
-- 'score' must match the level:
-  * low    -> 50
-  * medium -> 75
-  * high   -> 100
-- 'text' must be the answer content, written entirely in {lang}, with no other language.
-- All four answers must be unique in reasoning, detail and depth.
-
-Constraints:
-- Output MUST be valid JSON only (no comments, no explanation, no Markdown).
-- Do NOT include any keys other than 'level', 'score' and 'text' inside each answer object.
-- Do NOT wrap JSON in backticks.
-";
-    }
-
     public static string BuildEvaluationPrompt(
         string question,
         string studentAnswer,
@@ -153,6 +109,88 @@ Constraints:
 - Output MUST be plain text only (no JSON, no Markdown formatting like ``` or ###).
 - All text MUST be written entirely in {lang}.
 - Do not include any meta commentary about being an AI model or following instructions.
+";
+    }
+
+    public static string BuildGenerationPromptBatch(IEnumerable<string> questions, string lang = "Russian")
+    {
+      var list = questions.ToList();
+      var numbered = string.Join("\n", list.Select((q, i) => $"{i}. {q}"));
+
+      return $@"
+You are creating four distinct answers for each of several questions to train critical thinking.
+
+Strict terminology rules (MANDATORY):
+- Translate ALL English terms, abbreviations, and technical jargon to Russian equivalents.
+- Examples:
+  - ""issues"" -> ""проблемы"" or ""вопросы""
+  - ""bias"" -> ""предвзятость""
+  - ""transparency"" -> ""прозрачность""
+  - ""algorithm"" -> ""алгоритм""
+- NEVER use English words, even if they are common in tech (e.g., NO ""issues"", ""bias"", ""ML"" — use ""машинное обучение"").
+- If a direct Russian equivalent doesn't exist, transliterate phonetically (e.g., ""prompt"" -> ""промпт"") but prefer full Russian description.
+
+Language rules (VERY STRICT):
+- Target language: {lang}.
+- Every word of your output (apart from proper names/brands like ""TikTok"", ""YouTube"", ""Netflix"", ""GDPR"", ""FOMO"") MUST be in Russian.
+- Do NOT use mixed phrases like ""Этические issues"", ""цифровая overload"", ""перегрузка via apps"", etc.
+- You MUST fully translate such words into Russian (например: ""этические проблемы"", а не ""этические issues"").
+- If you mention an English acronym (например FOMO), immediately explain it in Russian in parentheses once (например: ""FOMO (страх упустить что-то важное)"").
+- Do NOT use English technical words like ""bias"", ""dualistically"", ""big data"", ""simulations"", ""via"", ""issues"", etc. Always replace them with natural Russian equivalents.
+
+BAD examples (forbidden):
+- ""Этические issues включают предвзятость...""
+- ""Технология dualistically влияет...""
+- ""Перегрузка via notifications...""
+
+GOOD examples (allowed):
+- ""Этические проблемы включают предвзятость...""
+- ""Технология по-разному влияет на решения...""
+- ""Перегрузка из-за большого числа уведомлений...""
+
+Here is the numbered list of questions:
+{numbered}
+
+You MUST produce STRICT JSON with the following structure (no extra text before or after JSON):
+
+{{
+  ""items"": [
+    {{
+      ""index"": 0,
+      ""question"": ""<question 0 text>"",
+      ""answers"": [
+        {{
+          ""level"": ""low|medium|high"",
+          ""score"": 50|75|100,
+          ""text"": ""string""
+        }},
+        ...
+      ]
+    }},
+    ...
+  ]
+}}
+
+Requirements for EACH question:
+- There must be exactly ONE item in 'items' for each input question index.
+- For each question:
+  - 'index' must match the numeric index of the question above (0-based).
+  - 'question' must copy the original question text.
+  - 'answers' must contain exactly 4 objects.
+  - 'level' values: exactly two ""low"", one ""medium"", one ""high"".
+  - 'score' must match the level:
+    * low    -> 50
+    * medium -> 75
+    * high   -> 100
+  - 'text' must be the answer content, written entirely in {lang}, with no other language.
+  - All four answers for a question must be unique in reasoning, detail and depth.
+- 'text' must use ONLY Russian words. Replace any English insertion with Russian translation inline.
+
+Constraints:
+- Output MUST be valid JSON only (no comments, no explanation, no Markdown).
+- Do NOT include any keys other than 'index', 'question' and 'answers' on each item, and 'level', 'score', 'text' inside each answer object.
+- Do NOT wrap JSON in backticks.
+- ANY word that is not in Russian (except proper names/brands/acronyms as described above) is FORBIDDEN.
 ";
     }
 }
