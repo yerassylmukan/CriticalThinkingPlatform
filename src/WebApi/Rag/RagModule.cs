@@ -55,6 +55,7 @@ public static class RagModule
     {
         app.MapRagStudent();
         app.MapRagTeacher();
+        app.MapDashboard();
         return app;
     }
 }

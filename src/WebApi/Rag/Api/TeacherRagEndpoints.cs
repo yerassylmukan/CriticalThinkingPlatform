@@ -16,15 +16,35 @@ public static class TeacherRagEndpoints
             .WithTags("RAG:TEACHER")
             .RequireAuthorization(p => p.RequireRole("Teacher"));
 
-        g.MapPost("/topics", async ([FromBody] CreateTopicRequest r, RagService svc) =>
+        g.MapPost("/topics", async ([FromBody] CreateTopicRequest r, ClaimsPrincipal user, RagService svc) =>
         {
+            var tid = user.FindFirstValue(ClaimTypes.NameIdentifier)!;
             var lang = string.IsNullOrWhiteSpace(r.Lang) ? "English" : r.Lang;
 
             var topic = r.GenerateConspect
-                ? await svc.CreateTopicWithGeneratedAnswersAndConspectAsync(r.Title, r.Questions, lang)
-                : await svc.CreateTopicWithGeneratedAnswersAsync(r.Title, r.Questions, r.Conspect, lang);
+                ? await svc.CreateTopicWithGeneratedAnswersAndConspectAsync(r.Title, r.Questions, lang, tid)
+                : await svc.CreateTopicWithGeneratedAnswersAsync(r.Title, r.Questions, r.Conspect, lang, tid);
 
             return Results.Json(new { topic.Id, topic.Title, topic.CreatedUtc });
+        });
+
+        g.MapGet("/topics", async (ClaimsPrincipal user, RagDbContext db, [FromQuery] int page, [FromQuery] int pageSize) =>
+        {
+            var tid = user.FindFirstValue(ClaimTypes.NameIdentifier)!;
+            page = page <= 0 ? 1 : page;
+            pageSize = pageSize <= 0 ? 20 : Math.Min(100, pageSize);
+
+            var q = db.Topics.Where(t => t.TeacherId == tid);
+
+            var total = await q.CountAsync();
+            var items = await q
+                .OrderByDescending(t => t.CreatedUtc)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .Select(t => new { t.Id, t.Title, t.CreatedUtc })
+                .ToListAsync();
+
+            return Results.Ok(new { items, total, page, pageSize });
         });
 
         g.MapGet("/topics/{id:guid}", async (Guid id, RagDbContext db) =>

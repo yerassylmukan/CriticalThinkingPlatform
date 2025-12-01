@@ -87,6 +87,13 @@ public static class TeacherStudentsEndpoints
                 error == "not_found" ? Results.NotFound() : Results.BadRequest(new { error });
         });
 
+        tg.MapDelete("{userId}", async (string userId, StudentService svc, CancellationToken ct) =>
+        {
+            var (ok, error) = await svc.DeleteAsync(userId, ct);
+            return ok ? Results.NoContent() :
+                error == "not_found" ? Results.NotFound() : Results.BadRequest(new { error });
+        });
+
         return app;
     }
 

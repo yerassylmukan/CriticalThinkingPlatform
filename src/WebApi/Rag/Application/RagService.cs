@@ -24,6 +24,7 @@ public sealed class RagService
         IEnumerable<string> questions,
         string? conspect = null,
         string lang = "English",
+        string? teacherId = null,
         CancellationToken ct = default)
     {
         var questionList = questions.ToList();
@@ -32,7 +33,8 @@ public sealed class RagService
         {
             Title = title,
             CreatedUtc = DateTime.UtcNow,
-            Conspect = conspect
+            Conspect = conspect,
+            TeacherId = teacherId
         };
 
         foreach (var q in questionList.Select(qtext => new Question { Text = qtext }))
@@ -100,9 +102,10 @@ public sealed class RagService
         string title,
         IEnumerable<string> questions,
         string lang = "English",
+        string? teacherId = null,
         CancellationToken ct = default)
     {
-        var topic = await CreateTopicWithGeneratedAnswersAsync(title, questions, null, lang, ct);
+        var topic = await CreateTopicWithGeneratedAnswersAsync(title, questions, null, lang, teacherId, ct);
 
         var conspectPrompt = PromptTemplates.BuildConspectPrompt(title, questions, lang);
         var conspect = await _llm.ChatAsync(conspectPrompt, false, ct);

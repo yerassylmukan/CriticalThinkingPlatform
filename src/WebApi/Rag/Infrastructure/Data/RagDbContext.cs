@@ -27,6 +27,7 @@ public class RagDbContext : DbContext
             e.Property(x => x.Title).HasMaxLength(200).IsRequired();
             e.Property(x => x.CreatedUtc).IsRequired();
             e.Property(x => x.Conspect).HasColumnType("text");
+            e.Property(x => x.TeacherId).HasMaxLength(128);
             e.HasMany(x => x.Questions)
                 .WithOne(x => x.Topic)
                 .HasForeignKey(x => x.TopicId)

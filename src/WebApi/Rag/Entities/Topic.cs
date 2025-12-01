@@ -8,5 +8,6 @@ public class Topic
     [MaxLength(200)] public string Title { get; set; } = default!;
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     public string? Conspect { get; set; }
+    [MaxLength(128)] public string? TeacherId { get; set; }
     public List<Question> Questions { get; set; } = new();
 }

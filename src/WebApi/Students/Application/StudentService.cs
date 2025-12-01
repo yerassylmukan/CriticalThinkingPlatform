@@ -239,6 +239,27 @@ public sealed class StudentService
             : (false, string.Join("; ", res.Errors.Select(e => e.Code)), null);
     }
 
+    public async Task<(bool ok, string? error)> DeleteAsync(string userId, CancellationToken ct = default)
+    {
+        var u = await _userManager.FindByIdAsync(userId);
+        if (u is null) return (false, "not_found");
+
+        var sp = await _db.StudentProfiles.SingleOrDefaultAsync(x => x.UserId == userId, ct);
+        if (sp != null)
+            _db.StudentProfiles.Remove(sp);
+
+        var members = await _db.ClassMembers.Where(m => m.UserId == userId).ToListAsync(ct);
+        if (members.Count > 0)
+            _db.ClassMembers.RemoveRange(members);
+
+        await _db.SaveChangesAsync(ct);
+
+        var delete = await _userManager.DeleteAsync(u);
+        return delete.Succeeded
+            ? (true, null)
+            : (false, string.Join("; ", delete.Errors.Select(e => e.Code)));
+    }
+
     private static string GenerateTempPassword()
     {
         const string chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";

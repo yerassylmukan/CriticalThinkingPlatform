@@ -8,6 +8,7 @@ using WebApi.Auth.Infrastructure;
 using WebApi.Auth.Infrastructure.Data;
 using WebApi.Common;
 using WebApi.Rag;
+using WebApi.Rag.Api;
 using WebApi.Rag.Infrastructure.Data;
 using WebApi.Students;
 
@@ -96,5 +97,6 @@ app.UseAuthorization();
 app.MapRag();
 app.MapAuthModule();
 app.MapStudentsModule();
+app.MapHome();
 
 app.Run();
