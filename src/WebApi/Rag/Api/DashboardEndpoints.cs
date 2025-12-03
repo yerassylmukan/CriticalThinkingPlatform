@@ -27,39 +27,43 @@ public static class DashboardEndpoints
                 .Select(c => c.Id)
                 .ToListAsync();
 
-            var totalStudents = await school.ClassMembers
-                .Where(m => teacherClassIds.Contains(m.ClassId))
-                .Select(m => m.UserId)
-                .Distinct()
-                .CountAsync();
+            var studentIdsQuery = from cm in school.ClassMembers
+                where teacherClassIds.Contains(cm.ClassId)
+                select cm.UserId;
 
-            var studentIds = await school.ClassMembers
-                .Where(m => teacherClassIds.Contains(m.ClassId))
-                .Select(m => m.UserId)
-                .Distinct()
-                .ToListAsync();
+            var studentIds = await studentIdsQuery.Distinct().ToListAsync();
+            var totalStudents = studentIds.Count;
 
-            var totalSessions = await rag.StudentSessions
-                .CountAsync(s => studentIds.Contains(s.StudentId));
+            var totalSessions = studentIds.Count > 0
+                ? await rag.StudentSessions.CountAsync(s => studentIds.Contains(s.StudentId))
+                : 0;
 
             var totalTopics = await rag.Topics.CountAsync(t => t.TeacherId == tid);
 
-            var newStudents = await school.ClassMembers
-                .Where(m => teacherClassIds.Contains(m.ClassId) && m.JoinedUtc >= sevenDaysAgo)
-                .Select(m => m.UserId)
-                .Distinct()
-                .CountAsync();
+            var newStudents = teacherClassIds.Count > 0
+                ? await (from cm in school.ClassMembers
+                    where teacherClassIds.Contains(cm.ClassId) && cm.JoinedUtc >= sevenDaysAgo
+                    select cm.UserId).Distinct().CountAsync()
+                : 0;
 
-            var completedSessions = await rag.StudentSessions
-                .Where(s => studentIds.Contains(s.StudentId) && s.Evaluation != null && s.StartedUtc >= sevenDaysAgo)
-                .CountAsync();
+            var completedSessions = studentIds.Count > 0
+                ? await (from s in rag.StudentSessions
+                    join e in rag.Evaluations on s.Id equals e.SessionId
+                    where studentIds.Contains(s.StudentId) && s.StartedUtc >= sevenDaysAgo
+                    select s.Id).Distinct().CountAsync()
+                : 0;
 
-            var activeClassIds = await (from s in rag.StudentSessions
-                join cm in school.ClassMembers on s.StudentId equals cm.UserId
-                where studentIds.Contains(s.StudentId) && s.StartedUtc >= sevenDaysAgo && teacherClassIds.Contains(cm.ClassId)
-                select cm.ClassId)
-                .Distinct()
-                .CountAsync();
+            var activeStudentIds = studentIds.Count > 0
+                ? await (from s in rag.StudentSessions
+                    where studentIds.Contains(s.StudentId) && s.StartedUtc >= sevenDaysAgo
+                    select s.StudentId).Distinct().ToListAsync()
+                : new List<string>();
+
+            var activeClassIds = activeStudentIds.Count > 0 && teacherClassIds.Count > 0
+                ? await (from cm in school.ClassMembers
+                    where activeStudentIds.Contains(cm.UserId) && teacherClassIds.Contains(cm.ClassId)
+                    select cm.ClassId).Distinct().CountAsync()
+                : 0;
 
             return Results.Ok(new
             {
@@ -85,24 +89,31 @@ public static class DashboardEndpoints
                 .Select(c => c.Id)
                 .ToListAsync();
 
-            var studentIds = await school.ClassMembers
-                .Where(m => teacherClassIds.Contains(m.ClassId))
-                .Select(m => m.UserId)
-                .Distinct()
-                .ToListAsync();
+            if (teacherClassIds.Count == 0)
+                return Results.Ok(new List<object>());
 
-            var studentScores = await rag.StudentSessions
-                .Include(s => s.Evaluation)
-                .Where(s => studentIds.Contains(s.StudentId) && s.Evaluation != null)
-                .GroupBy(s => s.StudentId)
-                .Select(g => new
+            var studentIds = await (from cm in school.ClassMembers
+                where teacherClassIds.Contains(cm.ClassId)
+                select cm.UserId).Distinct().ToListAsync();
+
+            if (studentIds.Count == 0)
+                return Results.Ok(new List<object>());
+
+            var studentScores = await (from s in rag.StudentSessions
+                join e in rag.Evaluations on s.Id equals e.SessionId
+                where studentIds.Contains(s.StudentId)
+                group e by s.StudentId into g
+                select new
                 {
                     StudentId = g.Key,
-                    AvgScore = g.Average(s => s.Evaluation!.TotalScore)
+                    AvgScore = g.Average(e => e.TotalScore)
                 })
                 .OrderByDescending(x => x.AvgScore)
                 .Take(10)
                 .ToListAsync();
+
+            if (studentScores.Count == 0)
+                return Results.Ok(new List<object>());
 
             var userIds = studentScores.Select(x => x.StudentId).ToList();
 

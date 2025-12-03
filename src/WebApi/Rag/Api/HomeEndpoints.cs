@@ -18,10 +18,10 @@ public static class HomeEndpoints
             var teachersCount = await school.TeacherProfiles.CountAsync();
             var topicsCount = await rag.Topics.CountAsync();
 
-            var avgScore = await rag.Evaluations
-                .Select(e => e.TotalScore)
-                .DefaultIfEmpty(0)
-                .AverageAsync();
+            var evaluationCount = await rag.Evaluations.CountAsync();
+            var avgScore = evaluationCount > 0
+                ? await rag.Evaluations.AverageAsync(e => e.TotalScore)
+                : 0m;
 
             var successRate = Math.Round(avgScore, 0);
 

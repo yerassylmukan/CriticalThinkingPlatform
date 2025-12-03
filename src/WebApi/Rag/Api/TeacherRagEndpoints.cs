@@ -18,14 +18,31 @@ public static class TeacherRagEndpoints
 
         g.MapPost("/topics", async ([FromBody] CreateTopicRequest r, ClaimsPrincipal user, RagService svc) =>
         {
-            var tid = user.FindFirstValue(ClaimTypes.NameIdentifier)!;
-            var lang = string.IsNullOrWhiteSpace(r.Lang) ? "English" : r.Lang;
+            try
+            {
+                var tid = user.FindFirstValue(ClaimTypes.NameIdentifier)!;
+                var lang = string.IsNullOrWhiteSpace(r.Lang) ? "English" : r.Lang;
 
-            var topic = r.GenerateConspect
-                ? await svc.CreateTopicWithGeneratedAnswersAndConspectAsync(r.Title, r.Questions, lang, tid)
-                : await svc.CreateTopicWithGeneratedAnswersAsync(r.Title, r.Questions, r.Conspect, lang, tid);
+                var topic = r.GenerateConspect
+                    ? await svc.CreateTopicWithGeneratedAnswersAndConspectAsync(r.Title, r.Questions, lang, tid)
+                    : await svc.CreateTopicWithGeneratedAnswersAsync(r.Title, r.Questions, r.Conspect, lang, tid);
 
-            return Results.Json(new { topic.Id, topic.Title, topic.CreatedUtc });
+                return Results.Json(new { topic.Id, topic.Title, topic.CreatedUtc });
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("OpenRouter HTTP error 401"))
+            {
+                return Results.Problem(
+                    title: "OpenRouter Authentication Failed",
+                    detail: "The OpenRouter API key is invalid or expired. Please check your configuration.",
+                    statusCode: 503);
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("OpenRouter"))
+            {
+                return Results.Problem(
+                    title: "OpenRouter API Error",
+                    detail: ex.Message,
+                    statusCode: 503);
+            }
         });
 
         g.MapGet("/topics", async (ClaimsPrincipal user, RagDbContext db, [FromQuery] int page, [FromQuery] int pageSize) =>
@@ -66,6 +83,41 @@ public static class TeacherRagEndpoints
 
             var studentIds = await school.ClassMembers
                 .Where(m => m.ClassId == classId)
+                .Select(m => m.UserId)
+                .Distinct()
+                .ToListAsync();
+
+            var q = rag.StudentSessions
+                .Include(s => s.Evaluation)
+                .Include(s => s.Topic)
+                .Where(s => studentIds.Contains(s.StudentId));
+
+            var total = await q.CountAsync();
+            var items = await q.OrderByDescending(s => s.StartedUtc)
+                .Skip((page - 1) * pageSize).Take(pageSize)
+                .Select(s => new TeacherSessionListItem(
+                    s.Id, s.StudentId, s.TopicId, s.Topic!.Title, s.StartedUtc,
+                    s.Evaluation != null, s.Evaluation!.TotalScore))
+                .ToListAsync();
+
+            return Results.Ok(new { items, total, page, pageSize });
+        });
+
+        g.MapGet("/sessions", async (ClaimsPrincipal user,
+            RagDbContext rag, SchoolDbContext school, [FromQuery] int page, [FromQuery] int pageSize) =>
+        {
+            var tid = user.FindFirstValue(ClaimTypes.NameIdentifier)!;
+
+            page = page <= 0 ? 1 : page;
+            pageSize = pageSize <= 0 ? 20 : Math.Min(100, pageSize);
+
+            var teacherClassIds = await school.Classes
+                .Where(c => c.OwnerTeacherId == tid)
+                .Select(c => c.Id)
+                .ToListAsync();
+
+            var studentIds = await school.ClassMembers
+                .Where(m => teacherClassIds.Contains(m.ClassId))
                 .Select(m => m.UserId)
                 .Distinct()
                 .ToListAsync();
